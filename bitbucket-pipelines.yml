@@ -1,0 +1,50 @@
+definitions:
+  services:
+    docker:
+      memory: 3072
+  steps:
+    - step: &code-analysis
+        runs-on: bfms
+        name: code analysis with sonarqube
+        script:
+          - pipe: sonarsource/sonarqube-scan:1.1.0
+            variables:
+              SONAR_HOST_URL: ${SONAR_SERVER}
+              SONAR_TOKEN: ${SONAR_KEY}
+              EXTRA_ARGS: -Dsonar.projectName=bfms-landing-page -Dsonar.projectKey=${SONAR_KEY} -Dsonar.branch.name=$BITBUCKET_BRANCH -Dsonar.sources=. -Dsonar.sourceEncoding=UTF-8
+
+    - step: &check-quality
+        runs-on: bfms
+        name: check quality gate on sonarqube
+        max-time: 5  # value you should use depends on the analysis time for your project
+        script:
+          - pipe: sonarsource/sonarqube-quality-gate:1.0.0
+            variables:
+              SONAR_TOKEN: ${SONAR_KEY}
+
+    - step: &deploy-app
+        runs-on: bfms
+        name: build & deploy angular app
+        image: node:16.12.0
+        caches:
+          - node
+        script:
+          - |
+            # build app
+            npm install
+            npm run build
+
+            # install awscli
+            apt-get update -y
+            apt-get install awscli -y
+            
+            # deploy app
+            aws s3 sync ./build ${S3_BUCKET} --region ap-southeast-1
+            aws cloudfront create-invalidation --distribution-id ${CLOUDFRONT_DISTRIBUTION_ID} --paths '/*'
+
+pipelines:
+  branches:
+    '{master}':
+      - step: *code-analysis
+      - step: *check-quality
+      - step: *deploy-app
